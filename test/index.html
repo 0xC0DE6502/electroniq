@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="EN-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    <title>Electroniq</title>
+
+    <meta name="title" content="Electroniq">
+    <meta name="description" content="Acorn Electron emulator">
+    <meta name="keywords" content="acorn, electron, emulator, debugger, profiler, 6502, 8bit, games, gaming, retro">
+    <meta name="viewport" content="width=device-width">
+
+    <!-- Favicon -->
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+
+    <style>
+      body { 
+        margin: 0px; 
+        overflow: hidden; 
+        background-color: black;
+      }
+      canvas.emscripten {border: 0px none; background-color: black;}
+      #overlay-drop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.75);
+        color: white;
+        font-size: 64px;
+        text-align: center;
+        line-height: 100px;
+        display: none;
+      }
+      #overlay-fetch {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100px;
+        background: rgb(8, 116, 123);
+        color: white;
+        font-size: 56px;
+        text-align: center;
+        line-height: 100px;
+        display: none;
+      }
+    </style>
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-ZXJWJL8F2S"></script>
+    <script>
+      window.dataLayer=window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-ZXJWJL8F2S');
+    </script>
+
+    <script type='text/javascript' src="https://cdn.jsdelivr.net/gh/eligrey/FileSaver.js/dist/FileSaver.min.js"> </script>
+    <script type='text/javascript'>
+      function saveFileFromMEMFSToDisk(memoryFSname, localFSname)
+      {
+        var isSafari=false; // Not supported, navigator.userAgent access is being restricted
+        //var isSafari=/^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        var data=FS.readFile(memoryFSname);
+        var blob;
+
+        if (isSafari) blob=new Blob([data.buffer], {type: "application/octet-stream"});
+        else blob=new Blob([data.buffer], {type: "application/octet-binary"});
+
+        // NOTE: SaveAsDialog is a browser setting. For example, in Google Chrome,
+        // in Settings/Advanced/Downloads section you have a setting:
+        // 'Ask where to save each file before downloading' - which you can set true/false.
+        // If you enable this setting it would always ask you and bring the SaveAsDialog
+        saveAs(blob, localFSname);
+      }
+    </script>
+  </head>
+  <body>
+
+    <!-- Block almost all (special) browser keys because we need to be able to type in the emulator -->
+    <!-- Especially keys like F12, forward slash, single quote, but also CTRL+G, CTRL+L, etc -->
+    <script>
+      const _special=[";", ":", "Shift"];
+      document.addEventListener("keydown", function (e) {
+        if (_special.includes(e.key)) Module.ccall('Keyboard_SetSpecialKeyState', 'void', ['string', 'bool'], [e.key, true]);
+        e.preventDefault();
+      }, true);
+      document.addEventListener("keyup", function (e) {
+        if (_special.includes(e.key)) Module.ccall('Keyboard_SetSpecialKeyState', 'void', ['string', 'bool'], [e.key, false]);
+        e.preventDefault();
+      }, true);
+      document.addEventListener("keypress", function (e) {
+        e.preventDefault();
+      }, true);
+    </script>
+
+    <script>
+      function GetURL() {
+        Module.ccall('Config_ParseURL', 'void', ['string'], [window.location.href]);
+      }
+    </script>
+
+    <script>
+      function OpenWebPage(url) {
+        window.open(url, "_blank");
+      }
+    </script>
+
+    <!-- Hook pagehide and visibilitychange events to save settings -->
+    <script>
+      window.addEventListener('pagehide', function() {
+        Module.ccall('Config_SaveSettings', 'void', [], []);
+      });
+      window.addEventListener('visibilitychange', function() {
+        if (document.visibilityState==='hidden') {
+          Module.ccall('Config_SaveSettings', 'void', [], []);
+        }
+      });
+    </script>
+
+    <!-- Load ROMified game from e.g. https://stardot.github.io/MegaGamesCartridge-ROM-recipes/ -->
+    <script>
+      async function LoadROMifiedGame(name, n_roms, base_url) {
+        try {
+          if (n_roms===1) url=base_url+name+".rom"
+          else url=base_url+name+"-1.rom"
+          const response=await fetch(url);
+          const arrayBuffer=await response.arrayBuffer();
+          const data=new Uint8Array(arrayBuffer);
+          const pathname=new URL(url).pathname;
+          const filename=pathname.substring(pathname.lastIndexOf('/')+1);
+          const [fname, ext]=filename.split('.');
+          const memfs_name='/'+filename;
+          FS.writeFile(memfs_name, data);
+          Module.ccall('Memory_LoadROM', 'void', ['number', 'number', 'string'], [2, 1, memfs_name]); // 1==SLOT_ROM
+        } catch (error) {
+          console.error('Failed to load file from URL:', error); //&&&& should notify user directly here, via alert() or something
+        }
+        if (n_roms===2) {
+          try {
+            url=base_url+name+"-2.rom"
+            const response=await fetch(url);
+            const arrayBuffer=await response.arrayBuffer();
+            const data=new Uint8Array(arrayBuffer);
+            const pathname=new URL(url).pathname;
+            const filename=pathname.substring(pathname.lastIndexOf('/')+1);
+            const [fname, ext]=filename.split('.');
+            const memfs_name='/'+filename;
+            FS.writeFile(memfs_name, data);
+            Module.ccall('Memory_LoadROM', 'void', ['number', 'number', 'string'], [1, 1, memfs_name]); // 1==SLOT_ROM
+          } catch (error) {
+            console.error('Failed to load file from URL:', error); //&&&& should notify user directly here, via alert() or something
+          }
+        }
+        Module.ccall('Keyboard_PressBreak', 'void', ['number'], [0]); // also sets Keyboard.autoboot=0
+        Module.ccall('Keyboard_SetAutoBoot', 'void', ['number', 'number'], [25, 1]); // 1==AUTOBOOT_ROM
+      }
+    </script>
+
+    <!-- Load file (tape, disk, sdcard) from URL -->
+    <script>
+      async function LoadFileFromURL(url, dev, param) {
+        try {
+          const response=await fetch(url);
+          const arrayBuffer=await response.arrayBuffer();
+          const data=new Uint8Array(arrayBuffer);
+          const pathname=new URL(url).pathname;
+          const filename=pathname.substring(pathname.lastIndexOf('/')+1);
+          const [fname, ext]=filename.split('.');
+          const memfs_name='/'+filename;
+          FS.writeFile(memfs_name, data);
+          if (ext==="uef") Module.ccall('Tape_Insert', 'void', ['string'], [memfs_name]);
+          else if (ext==="mmb") Module.ccall('SDCard_Insert', 'void', ['string'], [memfs_name]);
+          else if (ext==="rom") {
+            const bank_type=(dev>>4)&15;
+            const bank=dev&15;
+            Module.ccall('Memory_LoadROM', 'void', ['number', 'number', 'string'], [bank, bank_type, memfs_name]);
+          }
+          else Module.ccall('DiskDrive_Insert', 'void', ['number', 'string'], [dev, memfs_name]);
+          Module.ccall('Config_SetURLParamFinished', 'void', ['number'], [param]);
+        } catch (error) {
+          console.error('Failed to load file from URL:', error); //&&&& should notify user directly here, via alert() or something
+          Module.ccall('Config_SetURLParamFinished', 'void', ['number'], [param]);
+        }
+      }
+    </script>
+
+    <!-- Load file (tape, disk, sdcard) from local system -->
+    <script>
+      function OpenFileDialog(ext, dev) {
+        const _input=document.createElement("input");
+        _input.type="file";
+        if (ext==="ssd") _input.accept=".ssd, .dsd";
+        else _input.accept="."+ext;
+        const FileSelect=function(event) {
+          const file=event.target.files[0];
+          if (file) {
+            const reader=new FileReader();
+            reader.onload=function(e) {
+              const data=new Uint8Array(e.target.result);
+              const memfs_name='/'+file.name;
+              FS.writeFile(memfs_name, data);
+              if (ext==="uef") Module.ccall('Tape_Insert', 'void', ['string'], [memfs_name]);
+              else if (ext==="mmb") Module.ccall('SDCard_Insert', 'void', ['string'], [memfs_name]);
+              else Module.ccall('DiskDrive_Insert', 'void', ['number', 'string'], [dev, memfs_name]);
+            };
+            reader.readAsArrayBuffer(file);
+          }
+          _input.removeEventListener("change", FileSelect);
+          _input.remove();
+        }
+        _input.addEventListener("change", FileSelect);
+        _input.click();
+      }
+    </script>
+
+    <canvas class=emscripten id=canvas oncontextmenu=event.preventDefault() tabindex=-1></canvas>
+
+    <!-- Fetching resources -->
+    <div id="overlay-fetch">Fetching resources...</div>
+    <script>
+      function SetOverlayFetch(disp) {
+        document.getElementById('overlay-fetch').style.display=disp;
+      }
+    </script>
+
+    <!-- Drop a file (tape, disk, sdcard) from local system into the emulator window -->
+    <!-- &&&& This should do checks on unsaved data etc as well -->
+    <div id="overlay-drop">Drop any tape, disk or sdcard file</div>
+    <script>
+      const overlay=document.getElementById('overlay-drop');
+      window.addEventListener('dragover', (event) => { // show overlay
+        event.preventDefault();
+        overlay.style.display='block';
+      });
+      window.addEventListener('dragleave', (event) => { // hide overlay
+        if (event.relatedTarget===null || !overlay.contains(event.relatedTarget)) {
+          overlay.style.display='none';
+        }
+      });
+      window.addEventListener('drop', (event) => { // file was dropped
+        event.preventDefault();
+        overlay.style.display='none'; // hide overlay
+        const file=event.dataTransfer.files[0];
+        if (file) {
+          const reader=new FileReader();
+          reader.onload=(e) => {
+            const data=new Uint8Array(e.target.result);
+            const memfs_name='/'+file.name;
+            FS.writeFile(memfs_name, data);
+            const [fname, ext]=file.name.split('.');
+            if (ext==="uef") Module.ccall('Tape_Insert', 'void', ['string'], [memfs_name]);
+            else if (ext==="mmb") Module.ccall('SDCard_Insert', 'void', ['string'], [memfs_name]);
+            else Module.ccall('DiskDrive_Insert', 'void', ['number', 'string'], [0, memfs_name]); // always drive 0
+          };
+          reader.readAsArrayBuffer(file);
+        }
+      });
+    </script>
+
+    <p id="output" style="display: none">
+    <script>
+      var Module={
+        print: (function() {
+          var element=document.getElementById('output');
+          if (element) element.value=''; // clear browser cache
+          return function(text) {
+            if (arguments.length>1) text=Array.prototype.slice.call(arguments).join(' ');
+            console.log(text);
+            if (element) {
+              element.value+=text+"\n";
+              element.scrollTop=element.scrollHeight; // focus on bottom
+            }
+          };
+        })(),
+        canvas: (function() {
+          var canvas=document.getElementById('canvas');
+          return canvas;
+        })()
+      };
+    </script>
+    </p>
+    <script async type="text/javascript" src="electroniq.js"></script>
+  </body>
+</html>
